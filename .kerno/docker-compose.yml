@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  neo4j:
+    image: neo4j:5.15.0
+    environment:
+      - NEO4J_AUTH=neo4j/neox1234
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p neox1234 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  sut:
+    build:
+      context: ${BUILD_CONTEXT}
+      dockerfile_inline: |
+        # Multi-stage Dockerfile for Node.js/TypeScript application
+
+        # Stage 1: Build stage
+        FROM node:18-alpine AS builder
+
+        # Set working directory
+        WORKDIR /app
+
+        # Copy package files
+        COPY package*.json ./
+
+        # Install all dependencies (including devDependencies for build)
+        RUN npm ci
+
+        # Copy source code
+        COPY . .
+
+        # Build the application
+        RUN npm run build
+
+        # Stage 2: Production stage
+        FROM node:18-alpine AS production
+
+        # Set working directory
+        WORKDIR /app
+
+        # Copy package files
+        COPY package*.json ./
+
+        # Install only production dependencies
+        RUN npm ci --only=production && \
+            npm cache clean --force
+
+        # Copy built application from builder stage
+        COPY --from=builder /app/dist ./dist
+
+        # Set environment variables with default values
+        ENV NODE_ENV=production
+
+        # Expose port (assuming standard Node.js port)
+        EXPOSE 3000
+
+        # Run the application
+        CMD ["node", "dist/main.js"]
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    labels:
+      - "jwt-signing-config=HS256:this_is_a_secret_meeting_all_requirements_of_any_hs_algorithms"
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
